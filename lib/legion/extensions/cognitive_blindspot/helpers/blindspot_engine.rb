@@ -17,19 +17,15 @@ module Legion
 
           def register_blindspot(domain:, discovered_by:, description:, severity: DEFAULT_SEVERITY)
             prune_blindspots_if_needed
-            blindspot = Blindspot.new(
-              domain:        domain,
-              discovered_by: discovered_by,
-              description:   description,
-              severity:      severity
-            )
+            blindspot = Blindspot.new(domain: domain, discovered_by: discovered_by,
+                                      description: description, severity: severity)
             @blindspots[blindspot.id] = blindspot
             recalculate_awareness
             blindspot
           end
 
           def acknowledge_blindspot(blindspot_id:)
-            blindspot = @blindspots[blindspot_id]
+            blindspot = @blindspots.fetch(blindspot_id, nil)
             return { found: false, blindspot_id: blindspot_id } unless blindspot
 
             blindspot.acknowledge!
@@ -39,7 +35,7 @@ module Legion
           end
 
           def mitigate_blindspot(blindspot_id:, boost: SEVERITY_BOOST)
-            blindspot = @blindspots[blindspot_id]
+            blindspot = @blindspots.fetch(blindspot_id, nil)
             return { found: false, blindspot_id: blindspot_id } unless blindspot
 
             blindspot.mitigate!(boost: boost)
@@ -49,7 +45,7 @@ module Legion
           end
 
           def resolve_blindspot(blindspot_id:)
-            blindspot = @blindspots[blindspot_id]
+            blindspot = @blindspots.fetch(blindspot_id, nil)
             return { found: false, blindspot_id: blindspot_id } unless blindspot
 
             blindspot.resolve!
@@ -61,17 +57,10 @@ module Legion
           def set_boundary(domain:, confidence: 0.5, coverage_estimate: 0.5)
             prune_boundaries_if_needed
             existing = boundary_for_domain(domain)
-            if existing
-              existing.update_confidence!(confidence)
-              existing.update_coverage!(coverage_estimate)
-              return existing
-            end
+            return update_boundary!(existing, confidence, coverage_estimate) if existing
 
-            boundary = KnowledgeBoundary.new(
-              domain:            domain,
-              confidence:        confidence,
-              coverage_estimate: coverage_estimate
-            )
+            boundary = KnowledgeBoundary.new(domain: domain, confidence: confidence,
+                                             coverage_estimate: coverage_estimate)
             @boundaries[boundary.id] = boundary
             boundary
           end
@@ -80,10 +69,9 @@ module Legion
             boundary = boundary_for_domain(domain)
             return { gap_detected: false, domain: domain, reason: :no_boundary } unless boundary
 
-            gap = boundary.gap_detected?(error_occurred: error_occurred)
-            { gap_detected: gap, domain: domain,
-              confidence:  boundary.confidence,
-              coverage:    boundary.coverage_estimate }
+            { gap_detected: boundary.gap_detected?(error_occurred: error_occurred),
+              domain: domain, confidence: boundary.confidence,
+              coverage: boundary.coverage_estimate }
           end
 
           def blindspots_by_domain(domain)
@@ -91,17 +79,9 @@ module Legion
             @blindspots.values.select { |b| b.domain == d }
           end
 
-          def active_blindspots
-            @blindspots.values.select(&:active?)
-          end
-
-          def acknowledged_blindspots
-            @blindspots.values.select { |b| b.status == :acknowledged }
-          end
-
-          def resolved_blindspots
-            @blindspots.values.select(&:resolved?)
-          end
+          def active_blindspots       = @blindspots.values.select(&:active?)
+          def acknowledged_blindspots = @blindspots.values.select { |b| b.status == :acknowledged }
+          def resolved_blindspots     = @blindspots.values.select(&:resolved?)
 
           def most_severe(limit: 5)
             @blindspots.values.sort_by { |b| -b.severity }.first(limit)
@@ -109,55 +89,43 @@ module Legion
 
           def mitigation_strategies(domain: nil)
             spots = domain ? blindspots_by_domain(domain) : @blindspots.values
-            active = spots.select(&:active?)
-            active.map do |b|
-              {
-                blindspot_id: b.id,
-                domain:       b.domain,
-                severity:     b.severity,
-                strategy:     strategy_for(b)
-              }
+            spots.select(&:active?).map do |b|
+              { blindspot_id: b.id, domain: b.domain, severity: b.severity, strategy: strategy_for(b) }
             end
           end
 
-          def coverage_report
-            @boundaries.values.map(&:to_h)
-          end
-
-          def awareness_label
-            Constants.label_for(AWARENESS_LABELS, @awareness_score) || :unaware
-          end
-
-          def awareness_gap
-            (1.0 - @awareness_score).clamp(0.0, 1.0).round(10)
-          end
+          def coverage_report  = @boundaries.values.map(&:to_h)
+          def awareness_label  = Constants.label_for(AWARENESS_LABELS, @awareness_score) || :unaware
+          def awareness_gap    = (1.0 - @awareness_score).clamp(0.0, 1.0).round(10)
 
           def johari_report
-            {
-              total_blindspots:    @blindspots.size,
-              active:              active_blindspots.size,
-              acknowledged:        acknowledged_blindspots.size,
-              resolved:            resolved_blindspots.size,
-              awareness_score:     @awareness_score.round(10),
-              awareness_label:     awareness_label,
-              awareness_gap:       awareness_gap,
-              boundaries_tracked:  @boundaries.size,
-              most_severe:         most_severe(limit: 3).map(&:to_h)
-            }
+            { total_blindspots:   @blindspots.size,
+              active:             active_blindspots.size,
+              acknowledged:       acknowledged_blindspots.size,
+              resolved:           resolved_blindspots.size,
+              awareness_score:    @awareness_score.round(10),
+              awareness_label:    awareness_label,
+              awareness_gap:      awareness_gap,
+              boundaries_tracked: @boundaries.size,
+              most_severe:        most_severe(limit: 3).map(&:to_h) }
           end
 
           def to_h
-            {
-              total_blindspots: @blindspots.size,
+            { total_blindspots: @blindspots.size,
               active:           active_blindspots.size,
               acknowledged:     acknowledged_blindspots.size,
               resolved:         resolved_blindspots.size,
               awareness_score:  @awareness_score.round(10),
-              awareness_label:  awareness_label
-            }
+              awareness_label:  awareness_label }
           end
 
           private
+
+          def update_boundary!(boundary, confidence, coverage_estimate)
+            boundary.update_confidence!(confidence)
+            boundary.update_coverage!(coverage_estimate)
+            boundary
+          end
 
           def boundary_for_domain(domain)
             d = domain.to_sym
@@ -168,8 +136,8 @@ module Legion
             total = @blindspots.size.to_f
             return @awareness_score = 1.0 if total.zero?
 
-            acknowledged = @blindspots.values.count { |b| !b.active? }.to_f
-            @awareness_score = (acknowledged / total).clamp(0.0, 1.0).round(10)
+            not_active = @blindspots.values.count { |b| !b.active? }.to_f
+            @awareness_score = (not_active / total).clamp(0.0, 1.0).round(10)
           end
 
           def strategy_for(blindspot)
@@ -184,13 +152,9 @@ module Legion
           def prune_blindspots_if_needed
             return if @blindspots.size < MAX_BLINDSPOTS
 
-            oldest_resolved = resolved_blindspots.min_by(&:created_at)
-            if oldest_resolved
-              @blindspots.delete(oldest_resolved.id)
-            else
-              lowest = @blindspots.values.min_by(&:severity)
-              @blindspots.delete(lowest.id) if lowest
-            end
+            target = resolved_blindspots.min_by(&:created_at) ||
+                     @blindspots.values.min_by(&:severity)
+            @blindspots.delete(target.id) if target
           end
 
           def prune_boundaries_if_needed

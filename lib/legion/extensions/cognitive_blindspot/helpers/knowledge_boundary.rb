@@ -42,13 +42,13 @@ module Legion
 
           def to_h
             {
-              id:               @id,
-              domain:           @domain,
-              confidence:       @confidence,
+              id:                @id,
+              domain:            @domain,
+              confidence:        @confidence,
               coverage_estimate: @coverage_estimate,
-              coverage_label:   coverage_label,
-              created_at:       @created_at,
-              updated_at:       @updated_at
+              coverage_label:    coverage_label,
+              created_at:        @created_at,
+              updated_at:        @updated_at
             }
           end
         end
